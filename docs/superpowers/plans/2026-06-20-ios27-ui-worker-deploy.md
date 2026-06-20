@@ -1,5 +1,7 @@
 # iOS 27 UI Worker Deploy Implementation Plan
 
+> Note: The D1 deployment guard work in this historical implementation plan has been superseded. The current repository uses Cloudflare Dashboard D1 binding and does not store `database_id` in `wrangler.toml`. Use `README.md` and `DEPLOY.md` for current deployment steps.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Refactor the meter dashboard into the approved iOS 27 / Liquid Glass Productivity Console, add focused tests, and guard Cloudflare Worker deployment from placeholder D1 configuration.

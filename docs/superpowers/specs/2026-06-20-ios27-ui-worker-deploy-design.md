@@ -1,5 +1,7 @@
 # iOS 27 Glass UI And Worker Deployment Design
 
+> Note: The D1 deployment decision in this historical design has been superseded. The current repository uses Cloudflare Dashboard D1 binding and does not store `database_id` in `wrangler.toml`. Use `README.md` and `DEPLOY.md` for current deployment steps.
+
 Date: 2026-06-20
 Project: `J:\电表统计`
 
