@@ -1,4 +1,4 @@
-name = "meter-usage-dashboard"
+name = "elcs"
 main = "src/worker.js"
 compatibility_date = "2026-06-19"
 
