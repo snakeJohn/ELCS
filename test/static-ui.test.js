@@ -8,7 +8,20 @@ test("package exposes test and dry-run deployment scripts", () => {
   const pkg = JSON.parse(read("package.json"));
 
   assert.equal(pkg.scripts.test, "node --test");
-  assert.equal(pkg.scripts["deploy:dry"], "wrangler deploy --dry-run");
+  assert.equal(pkg.scripts.dev, "wrangler pages dev public --d1 DB");
+  assert.equal(pkg.scripts["deploy:dry"], "wrangler pages deploy public --project-name elcs --branch main --commit-dirty=true");
+  assert.equal(pkg.scripts.deploy, "wrangler pages deploy public --project-name elcs");
+});
+
+test("project is configured for Cloudflare Pages Functions", () => {
+  const pagesFunctionPath = "functions/api/[[path]].js";
+
+  assert.equal(existsSync(pagesFunctionPath), true);
+  assert.equal(existsSync("wrangler.toml"), false);
+
+  const pagesFunction = read(pagesFunctionPath);
+  assert.match(pagesFunction, /src\/worker\.js/);
+  assert.match(pagesFunction, /context\.env/);
 });
 
 test("index uses local deterministic scripts and auth DOM", () => {

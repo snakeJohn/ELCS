@@ -1,15 +1,15 @@
 {
-  "name": "meter-usage-worker",
+  "name": "elcs-pages",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler pages dev public --d1 DB",
     "test": "node --test",
-    "deploy:dry": "wrangler deploy --dry-run",
-    "deploy": "wrangler deploy",
-    "db:local": "wrangler d1 migrations apply meter-usage --local",
-    "db:remote": "wrangler d1 migrations apply meter-usage --remote"
+    "deploy:dry": "wrangler pages deploy public --project-name elcs --branch main --commit-dirty=true",
+    "deploy": "wrangler pages deploy public --project-name elcs",
+    "db:local": "wrangler d1 migrations apply elcs --local",
+    "db:remote": "wrangler d1 migrations apply elcs --remote"
   },
   "devDependencies": {
     "wrangler": "latest"

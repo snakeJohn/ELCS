@@ -1,7 +1,0 @@
-name = "elcs"
-main = "src/worker.js"
-compatibility_date = "2026-06-19"
-
-[assets]
-directory = "./public"
-binding = "ASSETS"
