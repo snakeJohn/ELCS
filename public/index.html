@@ -3,55 +3,163 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>能耗统计</title>
+    <title>能耗控制台</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script defer src="./vendor/lucide.min.js"></script>
     <script defer src="./app.js"></script>
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="rail" aria-label="主导航">
-        <div class="brand-mark" aria-hidden="true"><i data-lucide="activity"></i></div>
-        <button class="rail-button is-active" data-section="overview" type="button" aria-label="概览"><i data-lucide="layout-dashboard"></i></button>
-        <button class="rail-button" data-section="records" type="button" aria-label="读数"><i data-lucide="clipboard-list"></i></button>
-        <button class="rail-button" data-section="forecast" type="button" aria-label="预测"><i data-lucide="cloud-sun"></i></button>
-        <button class="rail-button" data-section="settings" type="button" aria-label="设置"><i data-lucide="settings"></i></button>
+    <section class="auth-shell" id="authShell" aria-live="polite">
+      <article class="auth-card liquid-panel" id="loginPanel">
+        <div class="auth-mark" aria-hidden="true"><i data-lucide="activity"></i></div>
+        <p class="eyebrow">ELCS</p>
+        <h1>能耗控制台</h1>
+        <form class="entry-form" id="loginForm">
+          <label>
+            用户名
+            <input id="loginUsername" type="text" autocomplete="username" value="admin" required />
+          </label>
+          <label>
+            密码
+            <input id="loginPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="primary-button" type="submit"><i data-lucide="log-in"></i>登录</button>
+        </form>
+        <p class="form-message" id="loginMessage" role="status"></p>
+      </article>
+
+      <article class="auth-card liquid-panel is-hidden" id="changePasswordPanel">
+        <div class="auth-mark warning" aria-hidden="true"><i data-lucide="key-round"></i></div>
+        <p class="eyebrow">首次登录</p>
+        <h1>修改初始密码</h1>
+        <form class="entry-form" id="changePasswordForm">
+          <label>
+            当前密码
+            <input id="currentPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <label>
+            新密码
+            <input id="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          <label>
+            确认新密码
+            <input id="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          <button class="primary-button" type="submit"><i data-lucide="shield-check"></i>保存新密码</button>
+        </form>
+        <p class="form-message" id="changePasswordMessage" role="status"></p>
+      </article>
+    </section>
+
+    <div class="app-shell app-frame is-hidden" id="appShell">
+      <aside class="glass-rail" aria-label="主导航">
+        <div class="brand-lockup" aria-hidden="true">
+          <span class="brand-mark"><i data-lucide="activity"></i></span>
+          <span>ELCS</span>
+        </div>
+        <button class="rail-button is-active" data-section="overview" type="button" aria-label="概览">
+          <i data-lucide="layout-dashboard"></i><span>概览</span>
+        </button>
+        <button class="rail-button" data-section="records" type="button" aria-label="读数">
+          <i data-lucide="clipboard-list"></i><span>读数</span>
+        </button>
+        <button class="rail-button" data-section="forecast" type="button" aria-label="预测">
+          <i data-lucide="cloud-sun"></i><span>预测</span>
+        </button>
+        <button class="rail-button" data-section="settings" type="button" aria-label="设置">
+          <i data-lucide="settings"></i><span>设置</span>
+        </button>
       </aside>
 
+      <nav class="bottom-nav" aria-label="移动主导航">
+        <button class="rail-button is-active" data-section="overview" type="button" aria-label="概览">
+          <i data-lucide="layout-dashboard"></i><span>概览</span>
+        </button>
+        <button class="rail-button" data-section="records" type="button" aria-label="读数">
+          <i data-lucide="clipboard-list"></i><span>读数</span>
+        </button>
+        <button class="rail-button" data-section="forecast" type="button" aria-label="预测">
+          <i data-lucide="cloud-sun"></i><span>预测</span>
+        </button>
+        <button class="rail-button" data-section="settings" type="button" aria-label="设置">
+          <i data-lucide="settings"></i><span>设置</span>
+        </button>
+      </nav>
+
       <main class="content">
-        <header class="topbar">
+        <header class="glass-toolbar">
           <div>
             <p class="eyebrow">家庭能耗</p>
-            <h1>电表与燃气统计</h1>
+            <h1>能耗控制台</h1>
           </div>
           <div class="top-actions">
             <button class="ghost-button" id="refreshButton" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
             <button class="primary-button" id="openEntryButton" type="button"><i data-lucide="plus"></i>录入读数</button>
+            <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录"><i data-lucide="log-out"></i></button>
           </div>
         </header>
 
         <section class="status-strip">
           <div class="status-pill" id="electricStatus"><i data-lucide="zap"></i><span>电表待初始化</span></div>
           <div class="status-pill" id="gasStatus"><i data-lucide="flame"></i><span>燃气待初始化</span></div>
-          <div class="status-pill" id="weatherStatus"><i data-lucide="thermometer"></i><span>等待地址和密钥</span></div>
+          <div class="status-pill" id="weatherStatus"><i data-lucide="thermometer"></i><span>等待坐标和密钥</span></div>
           <div class="status-pill is-good"><i data-lucide="database"></i><span>Cloudflare D1</span></div>
         </section>
 
         <section class="section-view is-visible" id="overviewSection">
-          <div class="metric-grid">
-            <article class="metric-card meter-hero electric-hero">
-              <div class="card-head"><span>当前电表</span><i data-lucide="gauge"></i></div>
-              <div class="meter-face" aria-hidden="true">
-                <div class="meter-ring"><div class="meter-needle" id="electricNeedle"></div><div class="meter-center"></div></div>
+          <div class="console-grid">
+            <section class="panel liquid-panel chart-panel" id="overviewChartPanel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">每日消耗</p>
+                  <h2>近 30 天趋势</h2>
+                </div>
+                <div class="segmented" role="tablist" aria-label="图表类型">
+                  <button type="button" class="is-selected" data-chart-meter="electric">电</button>
+                  <button type="button" data-chart-meter="gas">燃气</button>
+                </div>
               </div>
+              <canvas id="usageChart" width="960" height="360" aria-label="每日消耗图表"></canvas>
+              <div class="empty-state" id="chartEmpty">录入初始读数和下一条读数后生成曲线</div>
+            </section>
+
+            <section class="panel liquid-panel quick-entry-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">快速录入</p>
+                  <h2>今日读数</h2>
+                </div>
+              </div>
+              <form class="entry-form" id="quickEntryForm">
+                <label>
+                  类型
+                  <select id="quickReadingMeterType">
+                    <option value="electric">电表</option>
+                    <option value="gas">燃气表</option>
+                  </select>
+                </label>
+                <label>
+                  日期
+                  <input id="quickReadingDate" type="date" required />
+                </label>
+                <label>
+                  累计读数
+                  <input id="quickReadingValue" type="number" min="0" step="0.01" inputmode="decimal" required />
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="save"></i>保存读数</button>
+              </form>
+              <p class="form-message" id="quickFormMessage" role="status"></p>
+            </section>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card electric-card">
+              <div class="card-head"><span>当前电表</span><i data-lucide="gauge"></i></div>
               <strong id="electricCurrent">--</strong>
               <small>kWh</small>
             </article>
-            <article class="metric-card meter-hero gas-hero">
+            <article class="metric-card gas-card">
               <div class="card-head"><span>当前燃气</span><i data-lucide="flame"></i></div>
-              <div class="meter-face" aria-hidden="true">
-                <div class="meter-ring gas-ring"><div class="meter-needle" id="gasNeedle"></div><div class="meter-center"></div></div>
-              </div>
               <strong id="gasCurrent">--</strong>
               <small>m³</small>
             </article>
@@ -67,37 +175,20 @@
             </article>
           </div>
 
-          <div class="dashboard-grid">
-            <section class="panel chart-panel">
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">每日消耗</p>
-                  <h2>近 30 天</h2>
-                </div>
-                <div class="segmented" role="tablist" aria-label="图表类型">
-                  <button type="button" class="is-selected" data-chart-meter="electric">电</button>
-                  <button type="button" data-chart-meter="gas">燃气</button>
-                </div>
+          <section class="panel liquid-panel insight-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">摘要</p>
+                <h2>近期变化</h2>
               </div>
-              <canvas id="usageChart" width="960" height="360" aria-label="每日消耗图表"></canvas>
-              <div class="empty-state" id="chartEmpty">录入初始读数和下一条读数后生成曲线</div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">摘要</p>
-                  <h2>近期变化</h2>
-                </div>
-              </div>
-              <div class="insight-list" id="insightList"></div>
-            </section>
-          </div>
+            </div>
+            <div class="insight-list" id="insightList"></div>
+          </section>
         </section>
 
         <section class="section-view" id="recordsSection">
           <div class="records-layout">
-            <section class="panel">
+            <section class="panel liquid-panel">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">手动录入</p>
@@ -125,7 +216,7 @@
               <p class="form-message" id="formMessage" role="status"></p>
             </section>
 
-            <section class="panel table-panel">
+            <section class="panel liquid-panel table-panel">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">历史</p>
@@ -153,7 +244,7 @@
 
         <section class="section-view" id="forecastSection">
           <div class="forecast-layout">
-            <section class="panel forecast-main">
+            <section class="panel liquid-panel forecast-main">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">彩云天气</p>
@@ -169,7 +260,7 @@
               <div class="forecast-grid" id="forecastGrid"></div>
             </section>
 
-            <section class="panel">
+            <section class="panel liquid-panel">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">定位</p>
@@ -188,7 +279,7 @@
 
         <section class="section-view" id="settingsSection">
           <div class="settings-layout">
-            <section class="panel">
+            <section class="panel liquid-panel">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">起点</p>
@@ -216,7 +307,7 @@
               <p class="form-message" id="initialMessage" role="status"></p>
             </section>
 
-            <section class="panel">
+            <section class="panel liquid-panel">
               <div class="panel-head">
                 <div>
                   <p class="eyebrow">位置</p>
@@ -251,9 +342,33 @@
                     <option value="30">近 30 天</option>
                   </select>
                 </label>
-                <button class="primary-button" type="submit"><i data-lucide="map-pin"></i>保存并定位</button>
+                <button class="primary-button" type="submit"><i data-lucide="map-pin"></i>保存地址和天气设置</button>
               </form>
               <p class="form-message" id="settingsMessage" role="status"></p>
+            </section>
+
+            <section class="panel liquid-panel location-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">坐标兜底</p>
+                  <h2>定位方式</h2>
+                </div>
+              </div>
+              <div class="location-actions">
+                <button class="ghost-button" id="useCurrentLocationButton" type="button"><i data-lucide="crosshair"></i>使用当前位置</button>
+                <div class="coordinate-grid">
+                  <label>
+                    纬度
+                    <input id="manualLatitude" type="number" min="-90" max="90" step="0.000001" inputmode="decimal" />
+                  </label>
+                  <label>
+                    经度
+                    <input id="manualLongitude" type="number" min="-180" max="180" step="0.000001" inputmode="decimal" />
+                  </label>
+                </div>
+                <button class="primary-button" id="saveManualLocationButton" type="button"><i data-lucide="navigation"></i>保存经纬度</button>
+                <p class="form-message" id="locationMessage" role="status"></p>
+              </div>
             </section>
           </div>
         </section>
@@ -261,7 +376,7 @@
     </div>
 
     <dialog class="entry-modal" id="startupModal">
-      <form method="dialog" class="modal-card" id="startupForm">
+      <form method="dialog" class="modal-card liquid-panel" id="startupForm">
         <div class="modal-icon" aria-hidden="true"><i data-lucide="gauge"></i></div>
         <p class="eyebrow">首次使用</p>
         <h2 id="startupTitle">设置初始读数</h2>

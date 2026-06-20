@@ -32,6 +32,7 @@ const state = {
   },
   settings: null,
   weather: null,
+  auth: null,
   chartMeter: "electric",
   startupQueue: [],
   promptQueue: [],
@@ -44,9 +45,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   cacheElements();
   setDefaultDates();
   bindEvents();
-  await loadState();
-  render();
-  maybeShowStartupModal();
+  await initializeAuth();
   refreshIcons();
 });
 
@@ -58,10 +57,17 @@ function cacheElements() {
     "addressLabel",
     "addressProvince",
     "addressStreet",
+    "appShell",
+    "authShell",
     "baselineDays",
     "baselineLabel",
     "caiyunApiKey",
+    "changePasswordForm",
+    "changePasswordMessage",
+    "changePasswordPanel",
     "chartEmpty",
+    "confirmPassword",
+    "currentPassword",
     "electricCurrent",
     "electricLast",
     "electricNeedle",
@@ -82,9 +88,24 @@ function cacheElements() {
     "initialMeterType",
     "initialValue",
     "insightList",
+    "locationMessage",
     "locationLabel",
     "locationProviderLabel",
+    "loginForm",
+    "loginMessage",
+    "loginPanel",
+    "loginPassword",
+    "loginUsername",
+    "logoutButton",
+    "manualLatitude",
+    "manualLongitude",
+    "newPassword",
     "openEntryButton",
+    "quickEntryForm",
+    "quickFormMessage",
+    "quickReadingDate",
+    "quickReadingMeterType",
+    "quickReadingValue",
     "readingDate",
     "readingMeterType",
     "readingValue",
@@ -106,7 +127,9 @@ function cacheElements() {
     "startupValue",
     "temperatureSensitivity",
     "toast",
+    "useCurrentLocationButton",
     "usageChart",
+    "saveManualLocationButton",
     "weatherStatus",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
@@ -123,15 +146,30 @@ function cacheElements() {
 }
 
 function bindEvents() {
+  els.loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await login();
+  });
+
+  els.changePasswordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await changePassword();
+  });
+
+  els.logoutButton.addEventListener("click", async () => {
+    await logout();
+  });
+
   els.openEntryButton.addEventListener("click", () => {
-    switchSection("records");
-    els.readingValue.focus();
+    switchSection("overview");
+    els.quickReadingValue.focus();
   });
 
   els.refreshButton.addEventListener("click", async () => {
-    await loadState();
-    render();
-    showToast("数据已刷新");
+    if (await loadState()) {
+      render();
+      showToast("数据已刷新");
+    }
   });
 
   els.navButtons.forEach((button) => {
@@ -149,22 +187,29 @@ function bindEvents() {
   els.entryForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const meterType = els.readingMeterType.value;
-    const result = await api(`/api/readings/${meterType}`, {
-      method: "POST",
-      body: {
-        date: els.readingDate.value,
-        value: els.readingValue.value,
+    await submitReadingForm({
+      meterType,
+      date: els.readingDate.value,
+      value: els.readingValue.value,
+      messageEl: els.formMessage,
+      clearValue: () => {
+        els.readingValue.value = "";
       },
     });
+  });
 
-    if (result.ok) {
-      state.readings[meterType] = result.data.readings;
-      els.readingValue.value = "";
-      showFormResult({ ok: true, message: "读数已保存" }, els.formMessage);
-      render();
-    } else {
-      showFormResult(result, els.formMessage);
-    }
+  els.quickEntryForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const meterType = els.quickReadingMeterType.value;
+    await submitReadingForm({
+      meterType,
+      date: els.quickReadingDate.value,
+      value: els.quickReadingValue.value,
+      messageEl: els.quickFormMessage,
+      clearValue: () => {
+        els.quickReadingValue.value = "";
+      },
+    });
   });
 
   els.initialForm.addEventListener("submit", async (event) => {
@@ -237,6 +282,8 @@ function bindEvents() {
   });
 
   els.refreshWeatherButton.addEventListener("click", () => refreshWeather(true));
+  els.useCurrentLocationButton.addEventListener("click", useCurrentLocation);
+  els.saveManualLocationButton.addEventListener("click", saveManualLocation);
 
   els.recordsBody.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-delete]");
@@ -263,19 +310,147 @@ function bindEvents() {
 function setDefaultDates() {
   const today = todayKey();
   els.readingDate.value = today;
+  els.quickReadingDate.value = today;
   els.initialDate.value = today;
   els.startupDate.value = today;
+}
+
+async function initializeAuth() {
+  const result = await api("/api/auth/status", { skipAuthRedirect: true });
+  if (result.ok && result.data.authenticated) {
+    state.auth = result.data;
+    if (result.data.mustChangePassword) {
+      showChangePassword();
+      return;
+    }
+    await showApp();
+    return;
+  }
+
+  showLogin();
+}
+
+async function login() {
+  showFormResult({ ok: true, message: "正在登录..." }, els.loginMessage, false);
+  const result = await api("/api/auth/login", {
+    method: "POST",
+    body: {
+      username: els.loginUsername.value.trim(),
+      password: els.loginPassword.value,
+    },
+    skipAuthRedirect: true,
+  });
+
+  if (!result.ok) {
+    showFormResult(result, els.loginMessage, false);
+    return;
+  }
+
+  state.auth = result.data;
+  els.currentPassword.value = "";
+  els.newPassword.value = "";
+  els.confirmPassword.value = "";
+
+  if (result.data.mustChangePassword) {
+    showChangePassword();
+    return;
+  }
+
+  await showApp();
+}
+
+async function changePassword() {
+  showFormResult({ ok: true, message: "正在保存..." }, els.changePasswordMessage, false);
+  const result = await api("/api/auth/change-password", {
+    method: "POST",
+    body: {
+      currentPassword: els.currentPassword.value,
+      newPassword: els.newPassword.value,
+      confirmPassword: els.confirmPassword.value,
+    },
+    skipAuthRedirect: true,
+  });
+
+  if (!result.ok) {
+    showFormResult(result, els.changePasswordMessage, false);
+    return;
+  }
+
+  state.auth = result.data;
+  els.loginPassword.value = "";
+  els.currentPassword.value = "";
+  els.newPassword.value = "";
+  els.confirmPassword.value = "";
+  await showApp();
+}
+
+async function logout() {
+  await api("/api/auth/logout", { method: "POST", skipAuthRedirect: true });
+  state.auth = null;
+  state.settings = null;
+  state.weather = null;
+  state.readings = { electric: [], gas: [] };
+  showLogin();
+  showToast("已退出登录");
+}
+
+async function showApp() {
+  els.authShell.classList.add("is-hidden");
+  els.appShell.classList.remove("is-hidden");
+  const loaded = await loadState();
+  if (!loaded) return;
+  render();
+  maybeShowStartupModal();
+}
+
+function showLogin() {
+  els.authShell.classList.remove("is-hidden");
+  els.loginPanel.classList.remove("is-hidden");
+  els.changePasswordPanel.classList.add("is-hidden");
+  els.appShell.classList.add("is-hidden");
+  els.loginMessage.textContent = "";
+  requestAnimationFrame(() => els.loginPassword.focus());
+  refreshIcons();
+}
+
+function showChangePassword() {
+  els.authShell.classList.remove("is-hidden");
+  els.loginPanel.classList.add("is-hidden");
+  els.changePasswordPanel.classList.remove("is-hidden");
+  els.appShell.classList.add("is-hidden");
+  els.changePasswordMessage.textContent = "";
+  requestAnimationFrame(() => els.currentPassword.focus());
+  refreshIcons();
 }
 
 async function loadState() {
   const result = await api("/api/state");
   if (!result.ok) {
     showToast(result.message);
-    return;
+    return false;
   }
   state.settings = result.data.settings;
   state.readings = result.data.readings;
   syncSettingsForm();
+  return true;
+}
+
+async function submitReadingForm({ meterType, date, value, messageEl, clearValue }) {
+  const result = await api(`/api/readings/${meterType}`, {
+    method: "POST",
+    body: { date, value },
+  });
+
+  if (result.ok) {
+    state.readings[meterType] = result.data.readings;
+    if (clearValue) clearValue();
+    showFormResult({ ok: true, message: "读数已保存" }, messageEl);
+    render();
+  } else {
+    showFormResult(result, messageEl);
+  }
+
+  return result;
 }
 
 async function saveInitialReading(meterType, date, value, messageEl, switchAfterSave = true) {
@@ -345,6 +520,10 @@ function syncSettingsForm() {
   els.temperatureSensitivity.value = settings.forecast?.sensitivity ?? 2.5;
   els.baselineDays.value = String(settings.forecast?.baselineDays ?? 14);
   els.sensitivityLabel.textContent = `${formatNumber(settings.forecast?.sensitivity ?? 2.5)}% / 摄氏度`;
+
+  const location = settings.location;
+  els.manualLatitude.value = location ? location.latitude : "";
+  els.manualLongitude.value = location ? location.longitude : "";
 }
 
 function readAddressForm() {
@@ -355,6 +534,70 @@ function readAddressForm() {
     street: els.addressStreet.value.trim(),
     detail: els.addressDetail.value.trim(),
   };
+}
+
+async function useCurrentLocation() {
+  if (!navigator.geolocation) {
+    showFormResult({ ok: false, message: "当前浏览器不支持定位" }, els.locationMessage);
+    return;
+  }
+
+  showFormResult({ ok: true, message: "正在请求浏览器定位..." }, els.locationMessage, false);
+  try {
+    const position = await getBrowserPosition();
+    els.manualLatitude.value = position.coords.latitude.toFixed(6);
+    els.manualLongitude.value = position.coords.longitude.toFixed(6);
+    await saveLocation({
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      provider: "Browser Geolocation",
+    });
+  } catch (error) {
+    showFormResult({ ok: false, message: error.message || "定位失败" }, els.locationMessage);
+  }
+}
+
+async function saveManualLocation() {
+  await saveLocation({
+    latitude: els.manualLatitude.value,
+    longitude: els.manualLongitude.value,
+    provider: "Manual Coordinates",
+  });
+}
+
+async function saveLocation(location) {
+  const addressText = addressToText(readAddressForm()) || addressToText(state.settings?.address || {});
+  const result = await api("/api/settings/location", {
+    method: "PUT",
+    body: {
+      ...location,
+      addressText,
+    },
+  });
+
+  if (result.ok) {
+    state.settings = result.data.settings;
+    syncSettingsForm();
+    renderSettingsSummary();
+    renderStatus();
+    showFormResult({ ok: true, message: "经纬度已保存" }, els.locationMessage);
+    await refreshWeather(false);
+    render();
+  } else {
+    showFormResult(result, els.locationMessage);
+  }
+
+  return result;
+}
+
+function getBrowserPosition() {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 60000,
+    });
+  });
 }
 
 function render() {
@@ -382,7 +625,9 @@ function renderMetrics() {
     els[meta.lastId].textContent = lastUsage ? formatNumber(lastUsage.usage) : "--";
 
     const needleAngle = latest ? clamp((lastUsage?.usage || 0) / Math.max(baseline * 2, 1), 0, 1) * 170 - 85 : -85;
-    els[meta.needleId].style.transform = `translateX(-50%) rotate(${needleAngle}deg)`;
+    if (els[meta.needleId]) {
+      els[meta.needleId].style.transform = `translateX(-50%) rotate(${needleAngle}deg)`;
+    }
   }
 }
 
@@ -756,11 +1001,16 @@ async function api(path, options = {}) {
   try {
     const response = await fetch(path, {
       method: options.method || "GET",
+      credentials: "same-origin",
       headers: options.body ? { "content-type": "application/json" } : undefined,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
     const data = await response.json();
     if (!response.ok) {
+      if (!options.skipAuthRedirect) {
+        if (response.status === 401) showLogin();
+        if (response.status === 403 && data.code === "PASSWORD_CHANGE_REQUIRED") showChangePassword();
+      }
       return { ok: false, message: data.error || "请求失败", data };
     }
     return { ok: true, data };
@@ -769,10 +1019,10 @@ async function api(path, options = {}) {
   }
 }
 
-function showFormResult(result, element) {
+function showFormResult(result, element, toastOnSuccess = true) {
   element.textContent = result.message;
   element.classList.toggle("is-error", !result.ok);
-  if (result.ok) showToast(result.message);
+  if (result.ok && toastOnSuccess) showToast(result.message);
 }
 
 function exportCsv() {

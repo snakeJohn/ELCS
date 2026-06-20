@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "test": "node --test",
+    "deploy:dry": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
     "db:local": "wrangler d1 migrations apply meter-usage --local",
     "db:remote": "wrangler d1 migrations apply meter-usage --remote"

@@ -1,4 +1,10 @@
 const METER_TYPES = new Set(["electric", "gas"]);
+const AUTH_USERNAME = "admin";
+const INITIAL_PASSWORD = "password";
+const SESSION_COOKIE_NAME = "elcs_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+const PASSWORD_ITERATIONS = 90000;
+
 const SETTING_DEFAULTS = {
   caiyunApiKey: "",
   address: {
@@ -25,7 +31,9 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       return handleApi(request, env, url).catch((error) => {
-        console.error(error);
+        if (!(error instanceof ApiError)) {
+          console.error(error);
+        }
         return jsonResponse({ error: error.message || "Server error" }, error.status || 500);
       });
     }
@@ -40,6 +48,13 @@ async function handleApi(request, env, url) {
   }
 
   const path = url.pathname.replace(/^\/api\/?/, "");
+
+  if (path === "auth/status" || path.startsWith("auth/")) {
+    return handleAuthApi(request, env.DB, path, url);
+  }
+
+  const authGate = await requireAppAccess(request, env.DB);
+  if (authGate) return authGate;
 
   if (request.method === "GET" && path === "state") {
     const [settings, electricReadings, gasReadings] = await Promise.all([
@@ -98,13 +113,26 @@ async function handleApi(request, env, url) {
     return jsonResponse({ location, address });
   }
 
+  if (request.method === "PUT" && path === "settings/location") {
+    const body = await readJson(request);
+    const location = sanitizeSubmittedLocation(body);
+    const settings = await getSettings(env.DB);
+    const next = {
+      ...settings,
+      location,
+    };
+
+    await setSettings(env.DB, next);
+    return jsonResponse({ settings: publicSettings(next) });
+  }
+
   if (request.method === "GET" && path === "weather") {
     const settings = await getSettings(env.DB);
     if (!settings.caiyunApiKey) {
       return jsonResponse({ error: "请先在设置中填写彩云天气 API 密钥" }, 400);
     }
     if (!settings.location) {
-      return jsonResponse({ error: "请先填写结构化地址并获取经纬度" }, 400);
+      return jsonResponse({ error: "请先保存经纬度，可使用当前位置或手动填写坐标" }, 400);
     }
 
     const weather = await fetchCaiyunWeather(settings.location, settings.caiyunApiKey);
@@ -120,6 +148,9 @@ async function handleApi(request, env, url) {
     const meterType = readingsMatch[1];
     const body = await readJson(request);
     const reading = sanitizeReading(meterType, body);
+    if (reading.isInitial) {
+      throw new ApiError("初始读数请在设置中修改", 400);
+    }
     await assertReadingOrder(env.DB, reading);
 
     const existing = await env.DB.prepare(
@@ -127,6 +158,10 @@ async function handleApi(request, env, url) {
     )
       .bind(meterType, reading.readingDate)
       .first();
+
+    if (existing?.is_initial) {
+      throw new ApiError("初始读数请在设置中修改", 400);
+    }
 
     await env.DB.prepare(
       `INSERT INTO readings (meter_type, reading_date, value, is_initial, updated_at)
@@ -137,7 +172,7 @@ async function handleApi(request, env, url) {
          is_initial = excluded.is_initial,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
     )
-      .bind(meterType, reading.readingDate, reading.value, reading.isInitial ? 1 : existing?.is_initial || 0)
+      .bind(meterType, reading.readingDate, reading.value, 0)
       .run();
 
     return jsonResponse({ readings: await listReadings(env.DB, meterType) });
@@ -205,12 +240,307 @@ async function handleApi(request, env, url) {
     const settings = await getSettings(env.DB);
     await setSettings(env.DB, {
       ...settings,
-      [`${meterType}LastPromptDate`]: String(body.date || todayInHongKong()),
+      [`${meterType}LastPromptDate`]: normalizePromptDate(body.date),
     });
     return jsonResponse({ settings: publicSettings(await getSettings(env.DB)) });
   }
 
   return jsonResponse({ error: "Not found" }, 404);
+}
+
+async function handleAuthApi(request, db, path, url) {
+  if (request.method === "GET" && path === "auth/status") {
+    const session = await getSessionFromRequest(db, request);
+    return jsonResponse(authStatusPayload(session?.auth || null, Boolean(session)));
+  }
+
+  if (request.method === "POST" && path === "auth/login") {
+    const body = await readJson(request);
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "");
+
+    if (username !== AUTH_USERNAME || !password) {
+      return jsonResponse({ error: "用户名或密码错误" }, 401);
+    }
+
+    let auth = await getAuthState(db);
+    if (!auth) {
+      if (password !== INITIAL_PASSWORD) {
+        return jsonResponse({ error: "用户名或密码错误" }, 401);
+      }
+      auth = {
+        username: AUTH_USERNAME,
+        passwordHash: await hashPassword(INITIAL_PASSWORD),
+        mustChangePassword: true,
+        sessions: {},
+      };
+    } else if (!(await verifyPassword(password, auth.passwordHash))) {
+      return jsonResponse({ error: "用户名或密码错误" }, 401);
+    }
+
+    pruneExpiredSessions(auth);
+    const token = createSessionToken();
+    auth.sessions[token] = createSessionRecord();
+    await setAuthState(db, auth);
+
+    return jsonResponse(authStatusPayload(auth, true), 200, {
+      "set-cookie": buildSessionCookie(token, request),
+    });
+  }
+
+  if (request.method === "POST" && path === "auth/change-password") {
+    const session = await getSessionFromRequest(db, request);
+    if (!session) {
+      return jsonResponse({ error: "请先登录" }, 401);
+    }
+
+    const body = await readJson(request);
+    const currentPassword = String(body.currentPassword || "");
+    const newPassword = String(body.newPassword || "");
+    const confirmPassword = String(body.confirmPassword || "");
+
+    if (!(await verifyPassword(currentPassword, session.auth.passwordHash))) {
+      return jsonResponse({ error: "当前密码不正确" }, 401);
+    }
+
+    const validationError = validateNewPassword(newPassword, confirmPassword, currentPassword);
+    if (validationError) {
+      return jsonResponse({ error: validationError }, 400);
+    }
+
+    const auth = session.auth;
+    auth.passwordHash = await hashPassword(newPassword);
+    auth.mustChangePassword = false;
+    auth.sessions = {};
+    const token = createSessionToken();
+    auth.sessions[token] = createSessionRecord();
+    await setAuthState(db, auth);
+
+    return jsonResponse(authStatusPayload(auth, true), 200, {
+      "set-cookie": buildSessionCookie(token, request),
+    });
+  }
+
+  if (request.method === "POST" && path === "auth/logout") {
+    const token = getCookie(request, SESSION_COOKIE_NAME);
+    const auth = await getAuthState(db);
+    if (auth && token && auth.sessions[token]) {
+      delete auth.sessions[token];
+      await setAuthState(db, auth);
+    }
+
+    return jsonResponse({ authenticated: false, mustChangePassword: false, canUseApp: false }, 200, {
+      "set-cookie": buildExpiredSessionCookie(request),
+    });
+  }
+
+  return jsonResponse({ error: "Not found" }, 404);
+}
+
+async function requireAppAccess(request, db) {
+  const session = await getSessionFromRequest(db, request);
+  if (!session) {
+    return jsonResponse({ error: "请先登录" }, 401);
+  }
+  if (session.auth.mustChangePassword) {
+    return jsonResponse({ error: "请先修改初始密码", code: "PASSWORD_CHANGE_REQUIRED" }, 403);
+  }
+  return null;
+}
+
+async function getAuthState(db) {
+  const row = await db.prepare("SELECT value FROM settings WHERE key = 'auth'").first();
+  if (!row?.value) return null;
+
+  try {
+    return sanitizeAuthState(JSON.parse(row.value));
+  } catch {
+    throw new ApiError("认证配置已损坏，请在 D1 中重置管理员密码", 500);
+  }
+}
+
+async function setAuthState(db, auth) {
+  const value = JSON.stringify(sanitizeAuthState(auth));
+  await db.prepare(
+    `INSERT INTO settings (key, value, updated_at)
+     VALUES ('auth', ?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+     ON CONFLICT(key)
+     DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(value)
+    .run();
+}
+
+function sanitizeAuthState(auth) {
+  const sessions = {};
+  for (const [token, session] of Object.entries(auth?.sessions || {})) {
+    if (!token || typeof token !== "string") continue;
+    sessions[token] = {
+      createdAt: String(session.createdAt || ""),
+      expiresAt: String(session.expiresAt || ""),
+    };
+  }
+
+  return {
+    username: AUTH_USERNAME,
+    passwordHash: sanitizePasswordHash(auth?.passwordHash),
+    mustChangePassword: auth?.mustChangePassword !== false,
+    sessions,
+  };
+}
+
+function sanitizePasswordHash(passwordHash) {
+  if (!passwordHash || typeof passwordHash !== "object") return null;
+  return {
+    algorithm: "PBKDF2-SHA256",
+    iterations: Number(passwordHash.iterations || PASSWORD_ITERATIONS),
+    salt: String(passwordHash.salt || ""),
+    hash: String(passwordHash.hash || ""),
+  };
+}
+
+async function getSessionFromRequest(db, request) {
+  const token = getCookie(request, SESSION_COOKIE_NAME);
+  if (!token) return null;
+
+  const auth = await getAuthState(db);
+  const session = auth?.sessions?.[token];
+  if (!auth || !session) return null;
+
+  if (!session.expiresAt || Date.parse(session.expiresAt) <= Date.now()) {
+    delete auth.sessions[token];
+    await setAuthState(db, auth);
+    return null;
+  }
+
+  return { auth, token, session };
+}
+
+function authStatusPayload(auth, authenticated) {
+  return {
+    authenticated,
+    username: authenticated ? AUTH_USERNAME : "",
+    mustChangePassword: authenticated ? Boolean(auth?.mustChangePassword) : false,
+    canUseApp: authenticated && !auth?.mustChangePassword,
+  };
+}
+
+function validateNewPassword(newPassword, confirmPassword, currentPassword) {
+  if (newPassword.length < 8) return "新密码至少需要 8 位";
+  if (newPassword !== confirmPassword) return "两次输入的新密码不一致";
+  if (newPassword === currentPassword) return "新密码不能与当前密码相同";
+  if (newPassword === INITIAL_PASSWORD) return "不能继续使用初始密码";
+  return "";
+}
+
+function createSessionRecord() {
+  const now = Date.now();
+  return {
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
+  };
+}
+
+function pruneExpiredSessions(auth) {
+  for (const [token, session] of Object.entries(auth.sessions || {})) {
+    if (!session.expiresAt || Date.parse(session.expiresAt) <= Date.now()) {
+      delete auth.sessions[token];
+    }
+  }
+}
+
+function createSessionToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+async function hashPassword(password) {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const hash = await derivePasswordHash(password, salt, PASSWORD_ITERATIONS);
+  return {
+    algorithm: "PBKDF2-SHA256",
+    iterations: PASSWORD_ITERATIONS,
+    salt: bytesToBase64(salt),
+    hash: bytesToBase64(hash),
+  };
+}
+
+async function verifyPassword(password, passwordHash) {
+  const safeHash = sanitizePasswordHash(passwordHash);
+  if (!safeHash?.salt || !safeHash?.hash) return false;
+
+  const salt = base64ToBytes(safeHash.salt);
+  const expected = base64ToBytes(safeHash.hash);
+  const actual = await derivePasswordHash(password, salt, safeHash.iterations);
+  return constantTimeEqual(actual, expected);
+}
+
+async function derivePasswordHash(password, salt, iterations) {
+  const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt,
+      iterations,
+    },
+    keyMaterial,
+    256,
+  );
+  return new Uint8Array(bits);
+}
+
+function constantTimeEqual(a, b) {
+  let diff = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    diff |= (a[index] || 0) ^ (b[index] || 0);
+  }
+  return diff === 0;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  if (typeof btoa === "function") return btoa(binary);
+  return Buffer.from(bytes).toString("base64");
+}
+
+function base64ToBytes(value) {
+  if (typeof atob === "function") {
+    const binary = atob(value);
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  }
+  return Uint8Array.from(Buffer.from(value, "base64"));
+}
+
+function getCookie(request, name) {
+  const cookie = request.headers.get("cookie") || "";
+  for (const part of cookie.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return "";
+}
+
+function buildSessionCookie(token, request) {
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${token}`,
+    "Path=/",
+    `Max-Age=${SESSION_TTL_SECONDS}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  if (new URL(request.url).protocol === "https:") parts.push("Secure");
+  return parts.join("; ");
+}
+
+function buildExpiredSessionCookie(request) {
+  const parts = [`${SESSION_COOKIE_NAME}=`, "Path=/", "Max-Age=0", "HttpOnly", "SameSite=Lax"];
+  if (new URL(request.url).protocol === "https:") parts.push("Secure");
+  return parts.join("; ");
 }
 
 async function getSettings(db) {
@@ -298,7 +628,7 @@ function sanitizeReading(meterType, body) {
   const readingDate = String(body.date || body.readingDate || "");
   const value = Number(body.value);
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(readingDate)) {
+  if (!isValidDateKey(readingDate)) {
     throw new ApiError("请选择有效日期", 400);
   }
 
@@ -315,45 +645,68 @@ function sanitizeReading(meterType, body) {
 }
 
 function sanitizeSettings(settings) {
+  const input = isPlainObject(settings) ? settings : {};
+  const forecast = sanitizeForecast(input.forecast);
   return {
     ...SETTING_DEFAULTS,
-    ...settings,
-    caiyunApiKey: String(settings.caiyunApiKey || ""),
-    address: sanitizeAddress(settings.address || {}),
-    location: sanitizeLocation(settings.location),
-    electricInitialComplete: Boolean(settings.electricInitialComplete),
-    gasInitialComplete: Boolean(settings.gasInitialComplete),
-    electricLastPromptDate: String(settings.electricLastPromptDate || ""),
-    gasLastPromptDate: String(settings.gasLastPromptDate || ""),
-    forecast: {
-      ...SETTING_DEFAULTS.forecast,
-      ...(settings.forecast || {}),
-      sensitivity: Number(settings.forecast?.sensitivity ?? SETTING_DEFAULTS.forecast.sensitivity),
-      baselineDays: Number(settings.forecast?.baselineDays ?? SETTING_DEFAULTS.forecast.baselineDays),
-    },
+    ...input,
+    caiyunApiKey: String(input.caiyunApiKey || ""),
+    address: sanitizeAddress(input.address),
+    location: sanitizeLocation(input.location),
+    electricInitialComplete: Boolean(input.electricInitialComplete),
+    gasInitialComplete: Boolean(input.gasInitialComplete),
+    electricLastPromptDate: isValidDateKey(input.electricLastPromptDate) ? String(input.electricLastPromptDate) : "",
+    gasLastPromptDate: isValidDateKey(input.gasLastPromptDate) ? String(input.gasLastPromptDate) : "",
+    forecast,
   };
 }
 
 function sanitizeAddress(address) {
+  const input = isPlainObject(address) ? address : {};
   return {
-    province: String(address.province || "").trim(),
-    city: String(address.city || "").trim(),
-    district: String(address.district || "").trim(),
-    street: String(address.street || "").trim(),
-    detail: String(address.detail || "").trim(),
+    province: String(input.province || "").trim(),
+    city: String(input.city || "").trim(),
+    district: String(input.district || "").trim(),
+    street: String(input.street || "").trim(),
+    detail: String(input.detail || "").trim(),
   };
 }
 
 function sanitizeLocation(location) {
-  if (!location) return null;
+  if (!isPlainObject(location)) return null;
   const latitude = Number(location.latitude);
   const longitude = Number(location.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return null;
   return {
     latitude,
     longitude,
     addressText: String(location.addressText || ""),
     provider: String(location.provider || ""),
+  };
+}
+
+function sanitizeSubmittedLocation(location) {
+  if (!isPlainObject(location)) {
+    throw new ApiError("请输入有效经纬度", 400);
+  }
+
+  const latitude = Number(location.latitude);
+  const longitude = Number(location.longitude);
+
+  if (!isValidLatitude(latitude)) {
+    throw new ApiError("请输入有效纬度（-90 到 90）", 400);
+  }
+
+  if (!isValidLongitude(longitude)) {
+    throw new ApiError("请输入有效经度（-180 到 180）", 400);
+  }
+
+  const provider = String(location.provider || "Manual Coordinates").trim() || "Manual Coordinates";
+  return {
+    latitude,
+    longitude,
+    addressText: String(location.addressText || "").trim(),
+    provider,
   };
 }
 
@@ -450,20 +803,79 @@ function assertMeterType(value) {
 
 async function readJson(request) {
   try {
-    return await request.json();
-  } catch {
+    const body = await request.json();
+    if (!isPlainObject(body)) {
+      throw new ApiError("请求体必须是有效 JSON 对象", 400);
+    }
+    return body;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError("请求体不是有效 JSON", 400);
   }
 }
 
-function jsonResponse(data, status = 200) {
+function sanitizeForecast(forecast) {
+  const input = isPlainObject(forecast) ? forecast : {};
+  const sensitivity = Number(input.sensitivity);
+  const baselineDays = Number(input.baselineDays);
+
+  return {
+    sensitivity: Number.isFinite(sensitivity) && sensitivity >= 0 && sensitivity <= 20 ? round(sensitivity) : SETTING_DEFAULTS.forecast.sensitivity,
+    baselineDays: [7, 14, 30].includes(baselineDays) ? baselineDays : SETTING_DEFAULTS.forecast.baselineDays,
+  };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isValidLatitude(value) {
+  return Number.isFinite(value) && value >= -90 && value <= 90;
+}
+
+function isValidLongitude(value) {
+  return Number.isFinite(value) && value >= -180 && value <= 180;
+}
+
+function isValidDateKey(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  return date.toISOString().slice(0, 10) === value;
+}
+
+function normalizePromptDate(value) {
+  if (value === undefined || value === null || value === "") {
+    return todayInHongKong();
+  }
+
+  const date = String(value);
+  if (!isValidDateKey(date)) {
+    throw new ApiError("请选择有效日期", 400);
+  }
+
+  return date;
+}
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
   const actualStatus = data instanceof ApiError ? data.status : status;
+  const headers = new Headers({
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  for (const [key, value] of Object.entries(extraHeaders)) {
+    headers.set(key, value);
+  }
+
   return new Response(JSON.stringify(data), {
     status: actualStatus,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
+    headers,
   });
 }
 
