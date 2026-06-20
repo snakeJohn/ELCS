@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+dist/
+.superpowers/
+dev.log
+dev2.log
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db

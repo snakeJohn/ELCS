@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>能耗统计</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail" aria-label="主导航">
+        <div class="brand-mark" aria-hidden="true"><i data-lucide="activity"></i></div>
+        <button class="rail-button is-active" data-section="overview" type="button" aria-label="概览"><i data-lucide="layout-dashboard"></i></button>
+        <button class="rail-button" data-section="records" type="button" aria-label="读数"><i data-lucide="clipboard-list"></i></button>
+        <button class="rail-button" data-section="forecast" type="button" aria-label="预测"><i data-lucide="cloud-sun"></i></button>
+        <button class="rail-button" data-section="settings" type="button" aria-label="设置"><i data-lucide="settings"></i></button>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">家庭能耗</p>
+            <h1>电表与燃气统计</h1>
+          </div>
+          <div class="top-actions">
+            <button class="ghost-button" id="refreshButton" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
+            <button class="primary-button" id="openEntryButton" type="button"><i data-lucide="plus"></i>录入读数</button>
+          </div>
+        </header>
+
+        <section class="status-strip">
+          <div class="status-pill" id="electricStatus"><i data-lucide="zap"></i><span>电表待初始化</span></div>
+          <div class="status-pill" id="gasStatus"><i data-lucide="flame"></i><span>燃气待初始化</span></div>
+          <div class="status-pill" id="weatherStatus"><i data-lucide="thermometer"></i><span>等待地址和密钥</span></div>
+          <div class="status-pill is-good"><i data-lucide="database"></i><span>Cloudflare D1</span></div>
+        </section>
+
+        <section class="section-view is-visible" id="overviewSection">
+          <div class="metric-grid">
+            <article class="metric-card meter-hero electric-hero">
+              <div class="card-head"><span>当前电表</span><i data-lucide="gauge"></i></div>
+              <div class="meter-face" aria-hidden="true">
+                <div class="meter-ring"><div class="meter-needle" id="electricNeedle"></div><div class="meter-center"></div></div>
+              </div>
+              <strong id="electricCurrent">--</strong>
+              <small>kWh</small>
+            </article>
+            <article class="metric-card meter-hero gas-hero">
+              <div class="card-head"><span>当前燃气</span><i data-lucide="flame"></i></div>
+              <div class="meter-face" aria-hidden="true">
+                <div class="meter-ring gas-ring"><div class="meter-needle" id="gasNeedle"></div><div class="meter-center"></div></div>
+              </div>
+              <strong id="gasCurrent">--</strong>
+              <small>m³</small>
+            </article>
+            <article class="metric-card">
+              <div class="card-head"><span>昨日用电</span><i data-lucide="activity"></i></div>
+              <strong id="electricLast">--</strong>
+              <small>kWh</small>
+            </article>
+            <article class="metric-card">
+              <div class="card-head"><span>昨日燃气</span><i data-lucide="activity"></i></div>
+              <strong id="gasLast">--</strong>
+              <small>m³</small>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel chart-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">每日消耗</p>
+                  <h2>近 30 天</h2>
+                </div>
+                <div class="segmented" role="tablist" aria-label="图表类型">
+                  <button type="button" class="is-selected" data-chart-meter="electric">电</button>
+                  <button type="button" data-chart-meter="gas">燃气</button>
+                </div>
+              </div>
+              <canvas id="usageChart" width="960" height="360" aria-label="每日消耗图表"></canvas>
+              <div class="empty-state" id="chartEmpty">录入初始读数和下一条读数后生成曲线</div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">摘要</p>
+                  <h2>近期变化</h2>
+                </div>
+              </div>
+              <div class="insight-list" id="insightList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section-view" id="recordsSection">
+          <div class="records-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">手动录入</p>
+                  <h2>读数</h2>
+                </div>
+              </div>
+              <form class="entry-form" id="entryForm">
+                <label>
+                  类型
+                  <select id="readingMeterType">
+                    <option value="electric">电表</option>
+                    <option value="gas">燃气表</option>
+                  </select>
+                </label>
+                <label>
+                  日期
+                  <input id="readingDate" type="date" required />
+                </label>
+                <label>
+                  累计读数
+                  <input id="readingValue" type="number" min="0" step="0.01" inputmode="decimal" required />
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="save"></i>保存</button>
+              </form>
+              <p class="form-message" id="formMessage" role="status"></p>
+            </section>
+
+            <section class="panel table-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">历史</p>
+                  <h2>读数记录</h2>
+                </div>
+                <button class="ghost-button" id="exportButton" type="button"><i data-lucide="download"></i>导出 CSV</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>类型</th>
+                      <th>日期</th>
+                      <th>读数</th>
+                      <th>当日消耗</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recordsBody"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section-view" id="forecastSection">
+          <div class="forecast-layout">
+            <section class="panel forecast-main">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">彩云天气</p>
+                  <h2>未来用电预测</h2>
+                </div>
+                <button class="ghost-button" id="refreshWeatherButton" type="button"><i data-lucide="cloud-sun"></i>更新天气</button>
+              </div>
+              <div class="forecast-total">
+                <span>未来 7 日预计用电</span>
+                <strong id="forecastTotal">--</strong>
+                <small>kWh</small>
+              </div>
+              <div class="forecast-grid" id="forecastGrid"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">定位</p>
+                  <h2>地址与经纬度</h2>
+                </div>
+              </div>
+              <div class="settings-stack">
+                <div class="setting-row"><span>结构化地址</span><strong id="addressLabel">未填写</strong></div>
+                <div class="setting-row"><span>经纬度</span><strong id="locationLabel">未获取</strong></div>
+                <div class="setting-row"><span>定位来源</span><strong id="locationProviderLabel">--</strong></div>
+                <div class="setting-row"><span>预测基准</span><strong id="baselineLabel">-- kWh / 日</strong></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section-view" id="settingsSection">
+          <div class="settings-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">起点</p>
+                  <h2>初始读数</h2>
+                </div>
+              </div>
+              <form class="entry-form" id="initialForm">
+                <label>
+                  类型
+                  <select id="initialMeterType">
+                    <option value="electric">电表</option>
+                    <option value="gas">燃气表</option>
+                  </select>
+                </label>
+                <label>
+                  初始日期
+                  <input id="initialDate" type="date" required />
+                </label>
+                <label>
+                  初始读数
+                  <input id="initialValue" type="number" min="0" step="0.01" inputmode="decimal" required />
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="save"></i>保存初始读数</button>
+              </form>
+              <p class="form-message" id="initialMessage" role="status"></p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">位置</p>
+                  <h2>结构化地址</h2>
+                </div>
+              </div>
+              <form class="entry-form" id="settingsForm">
+                <div class="address-grid">
+                  <label>省/直辖市<input id="addressProvince" type="text" autocomplete="address-level1" /></label>
+                  <label>市<input id="addressCity" type="text" autocomplete="address-level2" /></label>
+                  <label>区/县<input id="addressDistrict" type="text" autocomplete="address-level3" /></label>
+                  <label>街道<input id="addressStreet" type="text" /></label>
+                </div>
+                <label>
+                  详细地址
+                  <input id="addressDetail" type="text" autocomplete="street-address" />
+                </label>
+                <label>
+                  彩云天气 API 密钥
+                  <input id="caiyunApiKey" type="password" autocomplete="off" placeholder="只保存在 Cloudflare D1" />
+                </label>
+                <label>
+                  温度敏感度
+                  <input id="temperatureSensitivity" type="range" min="0" max="8" step="0.5" />
+                  <span id="sensitivityLabel"></span>
+                </label>
+                <label>
+                  预测基准
+                  <select id="baselineDays">
+                    <option value="7">近 7 天</option>
+                    <option value="14">近 14 天</option>
+                    <option value="30">近 30 天</option>
+                  </select>
+                </label>
+                <button class="primary-button" type="submit"><i data-lucide="map-pin"></i>保存并定位</button>
+              </form>
+              <p class="form-message" id="settingsMessage" role="status"></p>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="entry-modal" id="startupModal">
+      <form method="dialog" class="modal-card" id="startupForm">
+        <div class="modal-icon" aria-hidden="true"><i data-lucide="gauge"></i></div>
+        <p class="eyebrow">首次使用</p>
+        <h2 id="startupTitle">设置初始读数</h2>
+        <label>
+          类型
+          <select id="startupMeterType">
+            <option value="electric">电表</option>
+            <option value="gas">燃气表</option>
+          </select>
+        </label>
+        <label>
+          初始日期
+          <input id="startupDate" type="date" required />
+        </label>
+        <label>
+          初始读数
+          <input id="startupValue" type="number" min="0" step="0.01" inputmode="decimal" required />
+        </label>
+        <p class="form-message" id="startupMessage" role="status"></p>
+        <div class="modal-actions">
+          <button class="ghost-button" id="startupSkipButton" type="button">稍后</button>
+          <button class="primary-button" type="submit"><i data-lucide="save"></i>保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
