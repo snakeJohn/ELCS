@@ -7,11 +7,12 @@
     "dev": "wrangler pages dev public --d1 DB",
     "test": "node --test",
     "deploy:dry": "wrangler pages deploy public --project-name elcs --branch main --commit-dirty=true",
-    "deploy": "wrangler pages deploy public --project-name elcs",
+    "deploy": "wrangler deploy",
     "db:local": "wrangler d1 migrations apply elcs --local",
-    "db:remote": "wrangler d1 migrations apply elcs --remote"
+    "db:remote": "wrangler d1 migrations apply elcs --remote",
+    "preview": "wrangler dev"
   },
   "devDependencies": {
-    "wrangler": "latest"
+    "wrangler": "^4.103.0"
   }
 }
